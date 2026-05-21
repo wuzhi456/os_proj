@@ -40,6 +40,8 @@ static void ext2_read_block(uint32 blockno, void *buf) {
     uint32 byte_off = blockno * ext2sb.block_size;
     uint32 dev_block = byte_off / BSIZE;
     uint32 dev_off = byte_off % BSIZE;
+    assert(ext2sb.block_size <= BSIZE);
+    assert(dev_off + ext2sb.block_size <= BSIZE);
     struct buf *bp = bread(0, dev_block);
     memmove(buf, bp->data + dev_off, ext2sb.block_size);
     brelse(bp);
@@ -49,6 +51,8 @@ static void ext2_write_block(uint32 blockno, const void *buf) {
     uint32 byte_off = blockno * ext2sb.block_size;
     uint32 dev_block = byte_off / BSIZE;
     uint32 dev_off = byte_off % BSIZE;
+    assert(ext2sb.block_size <= BSIZE);
+    assert(dev_off + ext2sb.block_size <= BSIZE);
     struct buf *bp = bread(0, dev_block);
     memmove(bp->data + dev_off, buf, ext2sb.block_size);
     bwrite(bp);
@@ -450,6 +454,8 @@ void ext2_init(void) {
     }
 
     ext2sb.block_size = 1024u << ext2sb.sb.s_log_block_size;
+    assert(ext2sb.block_size != 0);
+    assert(ext2sb.block_size <= BSIZE);
     ext2sb.blocks_per_group = ext2sb.sb.s_blocks_per_group;
     ext2sb.inodes_per_group = ext2sb.sb.s_inodes_per_group;
     ext2sb.inode_size = ext2sb.sb.s_inode_size ? ext2sb.sb.s_inode_size : sizeof(struct ext2_inode);

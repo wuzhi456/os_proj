@@ -464,17 +464,17 @@ static int ext2_open(struct inode *inode, struct file *file, uint32 oflags) {
 
     struct ext2_inode_info *info = ext2_inode_info(inode);
     if (info->fifo_state == NULL) {
-        void *pa = kallocpage();
-        if (pa == NULL)
+        void *fifo_page_pa = kallocpage();
+        if (fifo_page_pa == NULL)
             return -ENOMEM;
-        info->fifo_state = (void *)PA_TO_KVA(pa);
+        info->fifo_state = (void *)PA_TO_KVA(fifo_page_pa);
         struct ext2_fifo_state *fifo = (struct ext2_fifo_state *)info->fifo_state;
         memset(fifo, 0, sizeof(*fifo));
         spinlock_init(&fifo->lock, "ext2 fifo");
     }
 
     struct ext2_fifo_state *fifo = (struct ext2_fifo_state *)info->fifo_state;
-    int accmode = oflags & O_RDWR;
+    int accmode = oflags & 0x3;
     acquire(&fifo->lock);
     if (accmode == O_RDONLY) {
         fifo->readers++;
