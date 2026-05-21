@@ -82,6 +82,7 @@ struct inode_operations {
     int (*mkdir)(struct inode *dir, struct dentry *dentry);
     int (*rmdir)(struct inode *dir, struct dentry *dentry);
     int (*mkfifo)(struct inode *dir, struct dentry *dentry);
+    int (*open)(struct inode *inode, struct file *file, uint32 oflags);
 };
 
 #define IMODE_DEVICE 0x100

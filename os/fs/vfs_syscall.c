@@ -82,6 +82,14 @@ int vfs_open(struct file** out, char* name, uint32 oflags) {
     if (accmode == O_WRONLY || accmode == O_RDWR)
         f->mode |= FMODE_WRITE;
 
+    if (ind->iops && ind->iops->open) {
+        int oret = ind->iops->open(ind, f, oflags);
+        if (oret < 0) {
+            fput(f);
+            return oret;
+        }
+    }
+
     *out = f;
     return 0;
 }
