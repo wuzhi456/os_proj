@@ -317,7 +317,6 @@ static int ext2_get_block(struct ext2_inode_info *info, uint32 ino, uint32 file_
                 return ret;
             ptrs1[idx1] = ind_blk;
             ext2_write_block(dind_blk, buf);
-            ext2_zero_block(ind_blk);
         }
         ext2_read_block(ind_blk, buf);
         uint32 *ptrs2 = (uint32 *)buf;
@@ -366,7 +365,6 @@ static int ext2_get_block(struct ext2_inode_info *info, uint32 ino, uint32 file_
             return ret;
         ptrs1[idx1] = dind_blk;
         ext2_write_block(tind_blk, buf);
-        ext2_zero_block(dind_blk);
     }
     ext2_read_block(dind_blk, buf);
     uint32 *ptrs2 = (uint32 *)buf;
@@ -381,7 +379,6 @@ static int ext2_get_block(struct ext2_inode_info *info, uint32 ino, uint32 file_
             return ret;
         ptrs2[idx2] = ind_blk;
         ext2_write_block(dind_blk, buf);
-        ext2_zero_block(ind_blk);
     }
     ext2_read_block(ind_blk, buf);
     uint32 *ptrs3 = (uint32 *)buf;

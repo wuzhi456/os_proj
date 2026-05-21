@@ -11,6 +11,7 @@ extern void sfs_vfs_init(void);
 #define EXT2_FT_REG     1
 #define EXT2_FT_DIR     2
 #define EXT2_FT_FIFO    5
+#define EXT2_DIR_ENTRY_HEADER_SIZE 8
 
 #define EXT2_FIFO_SIZE 512
 
@@ -152,7 +153,7 @@ static int ext2_read_dir_entry(struct inode *dir, uint32 offset, struct ext2_dir
     int ret = ext2_read_data(dir, offset, entry, sizeof(*entry));
     if (ret < (int)sizeof(*entry))
         return -EINVAL;
-    if (entry->rec_len < 8)
+    if (entry->rec_len < EXT2_DIR_ENTRY_HEADER_SIZE)
         return -EINVAL;
     uint32 to_copy = MIN(entry->name_len, name_len - 1);
     if (to_copy > 0) {
@@ -238,7 +239,7 @@ static int ext2_dir_add(struct inode *dir, const char *name, uint32 ino, uint8 f
                 de->inode = ino;
                 de->name_len = name_len;
                 de->file_type = file_type;
-                memset(de->name, 0, de->rec_len - 8);
+                memset(de->name, 0, de->rec_len - EXT2_DIR_ENTRY_HEADER_SIZE);
                 memmove(de->name, name, name_len);
                 int ret = ext2_write_data(dir, offset, block_buf, block_bytes);
                 return ret < 0 ? ret : 0;
@@ -250,7 +251,7 @@ static int ext2_dir_add(struct inode *dir, const char *name, uint32 ino, uint8 f
                 ne->rec_len = de->rec_len - actual;
                 ne->name_len = name_len;
                 ne->file_type = file_type;
-                memset(ne->name, 0, ne->rec_len - 8);
+                memset(ne->name, 0, ne->rec_len - EXT2_DIR_ENTRY_HEADER_SIZE);
                 memmove(ne->name, name, name_len);
                 de->rec_len = actual;
                 int ret = ext2_write_data(dir, offset, block_buf, block_bytes);
@@ -268,7 +269,7 @@ static int ext2_dir_add(struct inode *dir, const char *name, uint32 ino, uint8 f
     de->rec_len = block_bytes;
     de->name_len = name_len;
     de->file_type = file_type;
-    memset(de->name, 0, de->rec_len - 8);
+    memset(de->name, 0, de->rec_len - EXT2_DIR_ENTRY_HEADER_SIZE);
     memmove(de->name, name, name_len);
     int ret = ext2_write_data(dir, new_block_off, block_buf, block_bytes);
     return ret < 0 ? ret : 0;
@@ -464,13 +465,19 @@ static int ext2_open(struct inode *inode, struct file *file, uint32 oflags) {
 
     struct ext2_inode_info *info = ext2_inode_info(inode);
     if (info->fifo_state == NULL) {
-        void *fifo_page_pa = kallocpage();
-        if (fifo_page_pa == NULL)
-            return -ENOMEM;
-        info->fifo_state = (void *)PA_TO_KVA(fifo_page_pa);
-        struct ext2_fifo_state *fifo = (struct ext2_fifo_state *)info->fifo_state;
-        memset(fifo, 0, sizeof(*fifo));
-        spinlock_init(&fifo->lock, "ext2 fifo");
+        ilock(inode);
+        if (info->fifo_state == NULL) {
+            void *fifo_page_pa = kallocpage();
+            if (fifo_page_pa == NULL) {
+                iunlock(inode);
+                return -ENOMEM;
+            }
+            info->fifo_state = (void *)PA_TO_KVA(fifo_page_pa);
+            struct ext2_fifo_state *fifo = (struct ext2_fifo_state *)info->fifo_state;
+            memset(fifo, 0, sizeof(*fifo));
+            spinlock_init(&fifo->lock, "ext2 fifo");
+        }
+        iunlock(inode);
     }
 
     struct ext2_fifo_state *fifo = (struct ext2_fifo_state *)info->fifo_state;
