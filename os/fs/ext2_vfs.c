@@ -148,7 +148,7 @@ static int ext2_write(struct file *file, void *__either buf, loff_t len) {
 
 static int ext2_read_dir_entry(struct inode *dir, uint32 offset, struct ext2_dir_entry *entry, char *name,
                                uint32 name_len) {
-    if (name_len == 0)
+    if (name_len < 2)
         return -EINVAL;
     int ret = ext2_read_data(dir, offset, entry, sizeof(*entry));
     if (ret < (int)sizeof(*entry))
@@ -278,6 +278,7 @@ static int ext2_dir_add(struct inode *dir, const char *name, uint32 ino, uint8 f
 static int ext2_dir_remove(struct inode *dir, const char *name, uint32 *out_ino) {
     uint32 block_bytes = ext2_block_size();
     uint8 block_buf[BSIZE];
+    uint32 name_len = strnlen(name, DIRSIZ);
     loff_t offset = 0;
 
     while (offset < dir->size) {
@@ -290,7 +291,6 @@ static int ext2_dir_remove(struct inode *dir, const char *name, uint32 *out_ino)
             if (de->rec_len == 0)
                 return -EINVAL;
             if (de->inode != 0) {
-                uint32 name_len = strnlen(name, DIRSIZ);
                 if (de->name_len == name_len && memcmp(de->name, name, name_len) == 0) {
                     uint32 found_ino = de->inode;
                     if (prev != NULL) {
@@ -517,7 +517,7 @@ static int ext2_fifo_read(struct file *file, void *__either addr, loff_t n) {
     while (fifo->nread == fifo->nwrite && fifo->writers > 0) {
         if (iskilled(pr)) {
             release(&fifo->lock);
-            return -1;
+            return -EINTR;
         }
         sleep(&fifo->nread, &fifo->lock);
     }
@@ -549,9 +549,13 @@ static int ext2_fifo_write(struct file *file, void *__either addr, loff_t n) {
     struct proc *pr = curr_proc();
     acquire(&fifo->lock);
     while (i < n) {
-        if (fifo->readers == 0 || iskilled(pr)) {
+        if (fifo->readers == 0) {
             release(&fifo->lock);
-            return -1;
+            return -EPIPE;
+        }
+        if (iskilled(pr)) {
+            release(&fifo->lock);
+            return -EINTR;
         }
         if (fifo->nwrite == fifo->nread + EXT2_FIFO_SIZE) {
             wakeup(&fifo->nread);

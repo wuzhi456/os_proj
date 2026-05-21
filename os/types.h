@@ -32,5 +32,7 @@ typedef long long loff_t;
 #define ENOSPC 7
 #define ENOTEMPTY 8
 #define EFBIG 9
+#define EINTR 10
+#define EPIPE 11
 
 #endif  // TYPES_H

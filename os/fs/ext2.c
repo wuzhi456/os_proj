@@ -15,6 +15,8 @@ struct ext2_fs {
     uint32 groups_count;
     uint32 first_data_block;
     uint32 group_desc_start;
+    uint32 ptrs_per_block;
+    uint32 max_file_blocks;
     struct ext2_group_desc *group_descs;
     spinlock_t alloc_lock;
 };
@@ -239,10 +241,8 @@ void ext2_free_inode_no(uint32 ino) {
 }
 
 static int ext2_get_block(struct ext2_inode_info *info, uint32 ino, uint32 file_block, int create, uint32 *out_blkno) {
-    uint32 ptrs_per_block = ext2sb.block_size / sizeof(uint32);
-    uint32 max_blocks = EXT2_NDIR_BLOCKS + ptrs_per_block + ptrs_per_block * ptrs_per_block +
-                        ptrs_per_block * ptrs_per_block * ptrs_per_block;
-    if (file_block >= max_blocks)
+    uint32 ptrs_per_block = ext2sb.ptrs_per_block;
+    if (file_block >= ext2sb.max_file_blocks)
         return -EFBIG;
 
     if (file_block < EXT2_NDIR_BLOCKS) {
@@ -453,6 +453,11 @@ void ext2_init(void) {
     ext2sb.block_size = 1024u << ext2sb.sb.s_log_block_size;
     assert(ext2sb.block_size != 0);
     assert(ext2sb.block_size <= BSIZE);
+    ext2sb.ptrs_per_block = ext2sb.block_size / sizeof(uint32);
+    uint64 max_blocks = EXT2_NDIR_BLOCKS + ext2sb.ptrs_per_block;
+    max_blocks += (uint64)ext2sb.ptrs_per_block * ext2sb.ptrs_per_block;
+    max_blocks += (uint64)ext2sb.ptrs_per_block * ext2sb.ptrs_per_block * ext2sb.ptrs_per_block;
+    ext2sb.max_file_blocks = (uint32)max_blocks;
     ext2sb.blocks_per_group = ext2sb.sb.s_blocks_per_group;
     ext2sb.inodes_per_group = ext2sb.sb.s_inodes_per_group;
     ext2sb.inode_size = ext2sb.sb.s_inode_size ? ext2sb.sb.s_inode_size : sizeof(struct ext2_inode);
