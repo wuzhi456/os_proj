@@ -10,7 +10,7 @@ The base system provides:
 - S-mode boot through OpenSBI.
 - QEMU single-core and SMP boot support.
 - High-address kernel virtual memory.
-- User process, syscall, VFS, pipe, simplefs, and virtio-blk infrastructure.
+- User process, syscall, VFS, pipe, simplefs, ext2 journal support, and virtio-blk infrastructure.
 - User-space file-system score tests and benchmark programs.
 
 The file-system project expects an Ext2 implementation to mount an Ext2 disk image and serve normal file-system operations through the VFS.
@@ -42,6 +42,8 @@ Run with an Ext2 image:
 ```sh
 make run FS_TYPE=ext2
 ```
+
+The Ext2 image includes a hidden `.ext2_journal` file that the kernel uses for redo logging.
 
 Run with SMP:
 

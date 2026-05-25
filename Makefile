@@ -125,8 +125,11 @@ ifeq ($(FS_TYPE),ext2)
 	@mkdir -p build
 	rm -f fs.img build/ext2_hello
 	printf '' > build/ext2_hello
+	# Use non-zero bytes so debugfs allocates real blocks for the journal file.
+	$(PY) -c "open('build/ext2_journal', 'wb').write(b'J' * (2 * $(FS_BLOCK_SIZE)))"
 	mke2fs -q -t ext2 -b $(FS_BLOCK_SIZE) -I 128 -O none -F fs.img $(FS_BLOCKS)
 	debugfs -w -R "write build/ext2_hello /hello" fs.img >/dev/null 2>&1
+	debugfs -w -R "write build/ext2_journal /.ext2_journal" fs.img >/dev/null 2>&1
 else
 	@mkdir -p build
 	gcc -O2 -g ./scripts/mkfs.c -o build/mkfs
