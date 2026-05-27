@@ -181,6 +181,9 @@ static void ext2_bwrite(struct ext2_block_view *view) {
                     warnf("ext2 journal commit failed for block %u", view->eblk);
                     if (ext2_journal_clear() < 0)
                         warnf("ext2 journal clear failed for block %u", view->eblk);
+                } else {
+                    // debug:journaling写路径写成功了也提醒
+                    warnf("ext2 journal committed: seq=%u target_block=%u", hdr.seq, hdr.target_block);
                 }
             } else {
                 warnf("ext2 journal prepare failed for block %u", view->eblk);
