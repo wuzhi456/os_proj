@@ -4,9 +4,12 @@
 #include "fs/buf.h"
 
 #define EXT2_MAX_GROUPS 128
+#define EXT2_JOURNAL_MAGIC 0x324a4e4c
+#define EXT2_JOURNAL_FILE_BLOCKS 2
 
 struct ext2_block_view {
     struct buf *buf;
+    uint32 eblk;
     uint8 *data;
 };
 
@@ -14,6 +17,16 @@ static struct ext2_fs ext2_state;
 static struct ext2_group_desc ext2_groups[EXT2_MAX_GROUPS];
 static int ext2_inited = 0;
 static uint8 ext2_zero_buf[BSIZE];
+static struct {
+    struct inode *inode;
+    sleeplock_t lock;
+    uint32 seq;
+    int ready;
+    int bypass;
+} ext2_journal;
+
+static int ext2_journal_replay(void);
+static int ext2_journal_clear(void);
 
 static int ext2_block_to_disk(uint32 eblk, uint32 *disk_blk, uint32 *offset) {
     uint32 bs = ext2_state.block_size;
@@ -37,11 +50,146 @@ static int ext2_bread(uint32 eblk, struct ext2_block_view *view) {
 
     struct buf *b = bread(0, disk_blk);
     view->buf = b;
+    view->eblk = eblk;
     view->data = b->data + offset;
     return 0;
 }
 
+static void ext2_brelse(struct ext2_block_view *view);
+
+static void ext2_journal_bypass_begin(void) {
+    __sync_add_and_fetch(&ext2_journal.bypass, 1);
+}
+
+static void ext2_journal_bypass_end(void) {
+    int v = __sync_sub_and_fetch(&ext2_journal.bypass, 1);
+    assert(v >= 0);
+}
+
+static int ext2_journal_write_raw(loff_t off, void *buf, loff_t len) {
+    if (ext2_journal.inode == NULL)
+        return 0;
+
+    ilock(ext2_journal.inode);
+    ext2_journal_bypass_begin();
+    int ret = ext2_writei(ext2_journal.inode, off, buf, len);
+    ext2_journal_bypass_end();
+    iunlock(ext2_journal.inode);
+    return ret == len ? 0 : -EINVAL;
+}
+
+static int ext2_journal_read_raw(loff_t off, void *buf, loff_t len) {
+    if (ext2_journal.inode == NULL)
+        return -EINVAL;
+
+    ilock(ext2_journal.inode);
+    int ret = ext2_readi(ext2_journal.inode, off, buf, len);
+    iunlock(ext2_journal.inode);
+    return ret == len ? 0 : -EINVAL;
+}
+
+static int ext2_journal_store_header(struct ext2_journal_hdr *hdr) {
+    uint32 bs = ext2_state.block_size;
+    uint8 *tmp = ext2_zero_buf;
+    if (bs > sizeof(ext2_zero_buf))
+        return -EINVAL;
+
+    memset(tmp, 0, bs);
+    memmove(tmp, hdr, sizeof(*hdr));
+    return ext2_journal_write_raw(0, tmp, bs);
+}
+
+static int ext2_journal_store_payload(uint8 *payload) {
+    return ext2_journal_write_raw(ext2_state.block_size, payload, ext2_state.block_size);
+}
+
+static int ext2_journal_clear(void) {
+    struct ext2_journal_hdr hdr;
+    memset(&hdr, 0, sizeof(hdr));
+    hdr.magic = EXT2_JOURNAL_MAGIC;
+    return ext2_journal_store_header(&hdr);
+}
+
+static int ext2_journal_apply(uint32 target_block, uint8 *payload) {
+    struct ext2_block_view view;
+    int ret = ext2_bread(target_block, &view);
+    if (ret < 0)
+        return ret;
+    memmove(view.data, payload, ext2_state.block_size);
+    bwrite(view.buf);
+    ext2_brelse(&view);
+    return 0;
+}
+
+static int ext2_journal_replay(void) {
+    if (ext2_journal.inode == NULL)
+        return 0;
+
+    uint32 bs = ext2_state.block_size;
+    if (bs > BSIZE)
+        return -EINVAL;
+
+    void *pa = kallocpage();
+    if (pa == NULL)
+        return -ENOMEM;
+    uint8 *buf = (uint8 *)PA_TO_KVA(pa);
+
+    struct ext2_journal_hdr hdr;
+    memset(&hdr, 0, sizeof(hdr));
+
+    ext2_journal_bypass_begin();
+    int ret = ext2_journal_read_raw(0, buf, bs);
+    if (ret < 0) {
+        ext2_journal_bypass_end();
+        kfreepage(pa);
+        return ret;
+    }
+    memmove(&hdr, buf, sizeof(hdr));
+    // Recovery cases:
+    // - COMMITTED: redo the recorded block image.
+    // - PREPARED: discard the partial record and clear the journal.
+    // - invalid magic: reinitialize the journal header.
+    if (hdr.magic == EXT2_JOURNAL_MAGIC && hdr.state == EXT2_JOURNAL_COMMITTED) {
+        ret = ext2_journal_read_raw(bs, buf, bs);
+        if (ret >= 0)
+            ret = ext2_journal_apply(hdr.target_block, buf);
+        if (ret >= 0)
+            ret = ext2_journal_clear();
+    } else if (hdr.magic == EXT2_JOURNAL_MAGIC && hdr.state == EXT2_JOURNAL_PREPARED) {
+        ret = ext2_journal_clear();
+    } else if (hdr.magic != EXT2_JOURNAL_MAGIC) {
+        ret = ext2_journal_clear();
+    }
+    ext2_journal_bypass_end();
+    kfreepage(pa);
+    return ret;
+}
+
 static void ext2_bwrite(struct ext2_block_view *view) {
+    if (ext2_journal.ready && ext2_journal.inode != NULL && __sync_fetch_and_add(&ext2_journal.bypass, 0) == 0) {
+        struct ext2_journal_hdr hdr;
+        uint32 bs = ext2_state.block_size;
+        if (bs <= BSIZE) {
+            acquiresleep(&ext2_journal.lock);
+            hdr.magic = EXT2_JOURNAL_MAGIC;
+            hdr.state = EXT2_JOURNAL_PREPARED;
+            hdr.target_block = view->eblk;
+            hdr.seq = ext2_journal.seq++;
+            if (ext2_journal_store_header(&hdr) >= 0 && ext2_journal_store_payload(view->data) >= 0) {
+                hdr.state = EXT2_JOURNAL_COMMITTED;
+                if (ext2_journal_store_header(&hdr) < 0) {
+                    warnf("ext2 journal commit failed for block %u", view->eblk);
+                    if (ext2_journal_clear() < 0)
+                        warnf("ext2 journal clear failed for block %u", view->eblk);
+                }
+            } else {
+                warnf("ext2 journal prepare failed for block %u", view->eblk);
+                if (ext2_journal_clear() < 0)
+                    warnf("ext2 journal clear failed for block %u", view->eblk);
+            }
+            releasesleep(&ext2_journal.lock);
+        }
+    }
     bwrite(view->buf);
 }
 
@@ -192,6 +340,34 @@ int ext2_init(void) {
     }
 
     ext2_inited = 1;
+    return 0;
+}
+
+int ext2_journal_init(struct inode *journal_inode) {
+    if (journal_inode == NULL)
+        return -EINVAL;
+
+    uint32 bs = ext2_state.block_size;
+    if (bs == 0 || bs > BSIZE)
+        return -EINVAL;
+    if (journal_inode->size < (loff_t)bs * EXT2_JOURNAL_FILE_BLOCKS)
+        return -EINVAL;
+
+    sleeplock_init(&ext2_journal.lock, "ext2 journal");
+    ext2_journal.inode = journal_inode;
+    ext2_journal.seq = 1;
+    ext2_journal.ready = 0;
+    ext2_journal.bypass = 0;
+
+    int ret = ext2_journal_replay();
+    if (ret < 0)
+        return ret;
+
+    ret = ext2_journal_clear();
+    if (ret < 0)
+        return ret;
+
+    ext2_journal.ready = 1;
     return 0;
 }
 

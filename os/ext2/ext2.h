@@ -111,6 +111,19 @@ struct ext2_fs {
     sleeplock_t lock;
 };
 
+enum ext2_journal_state {
+    EXT2_JOURNAL_EMPTY    = 0,
+    EXT2_JOURNAL_PREPARED = 1,
+    EXT2_JOURNAL_COMMITTED = 2,
+};
+
+struct ext2_journal_hdr {
+    uint32 magic;
+    uint32 state;
+    uint32 target_block;
+    uint32 seq;
+};
+
 struct ext2_inode_info {
     struct ext2_inode inode;
     uint32 ino;
@@ -120,6 +133,7 @@ struct ext2_inode_info {
 int ext2_probe(void);
 int ext2_init(void);
 int ext2_vfs_init(void);
+int ext2_journal_init(struct inode *journal_inode);
 
 struct ext2_fs *ext2_get_fs(void);
 

@@ -285,6 +285,10 @@ static int ext2_dir_is_empty(struct inode *dir) {
     return 1;
 }
 
+static int ext2_find_root_entry(struct inode *root, const char *name, uint32 *ino_out) {
+    return ext2_dir_lookup_inode(root, name, ino_out);
+}
+
 static struct inode *ext2_iget(struct superblock *sb, uint32 ino) {
     struct inode *ind = iget_locked(sb, ino);
     if (ind->private != NULL)
@@ -737,6 +741,24 @@ int ext2_vfs_init(void) {
     struct inode *root = ext2_iget(&ext2_sb, 2);
     if (root == NULL)
         return -EINVAL;
+
+    uint32 journal_ino = 0;
+    if (ext2_find_root_entry(root, ".ext2_journal", &journal_ino) == 0) {
+        struct inode *journal = ext2_iget(&ext2_sb, journal_ino);
+        if (journal == NULL) {
+            iunlockput(root);
+            return -EINVAL;
+        }
+        iunlock(journal);
+        int jret = ext2_journal_init(journal);
+        if (jret < 0) {
+            iput(journal);
+            iunlockput(root);
+            return jret;
+        }
+        // Keep one reference for the journal's lifetime; the mount owns it.
+    }
+
     iunlock(root);
 
     ext2_sb.root = root;
